@@ -1,0 +1,10 @@
+﻿{
+    "api_key": "",
+    "api_url": "https://api.siliconflow.cn/v1/chat/completions",
+    "model": "deepseek-ai/DeepSeek-V2.5",
+    "wait_min": 10,
+    "wait_max": 20,
+    "screenshot_dir": "./screenshots",
+    "browser_width": 550,
+    "browser_height": 700
+}
