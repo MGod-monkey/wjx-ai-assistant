@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 import time
+from threading import Event
 from typing import Callable, Dict, Optional
 
 from .ai_client import call_ai_api
@@ -43,6 +44,7 @@ def run_task(
     log_cb: Callable[..., None] = print,
     progress_cb: Optional[Callable[..., None]] = None,
     headless: bool = False,
+    stop_event: Event | None = None,
 ) -> bool:
     cfg_obj = get_config_object(cfg)
     if headless:
@@ -62,6 +64,9 @@ def run_task(
             logs.append(text)
         log_cb(msg, add_newline=add_newline, **kwargs)
 
+    def should_stop() -> bool:
+        return bool(stop_event and stop_event.is_set())
+
     driver = None
     questions = []
     answers = {}
@@ -70,10 +75,16 @@ def run_task(
         emit(f"正在访问: {url}")
         driver.get(url)
         time.sleep(3)
+        if should_stop():
+            emit("任务已在访问后停止。")
+            return False
 
         if click_entry_button(driver, emit):
             emit("已进入问卷页面。")
         wait_for_questions(driver, timeout=10)
+        if should_stop():
+            emit("任务已在解析前停止。")
+            return False
 
         emit("正在解析问卷内容...")
         questions = parse_questionnaire(driver)
@@ -88,16 +99,30 @@ def run_task(
 
         raw_answers = call_ai_api(questions, requirements, cfg_obj, emit)
         answers = validate_answers(questions, raw_answers)
+        if should_stop():
+            emit("任务已在 AI 生成后停止。")
+            return False
 
         emit("正在填写问卷...")
-        fill_questionnaire(driver, questions, answers, emit)
+        fill_questionnaire(driver, questions, answers, emit, stop_event=stop_event)
+        if should_stop():
+            emit("任务已在填写过程中停止。")
+            return False
+
         while go_next_page(driver):
             emit("已翻到下一页。")
+            if should_stop():
+                emit("任务已在翻页后停止。")
+                return False
 
         wait_time = random.randint(cfg_obj.wait_min, cfg_obj.wait_max)
         if wait_time > 0:
             emit(f"等待 {wait_time} 秒后提交...")
-            time.sleep(wait_time)
+            for _ in range(wait_time):
+                if should_stop():
+                    emit("任务已在提交等待期间停止。")
+                    return False
+                time.sleep(1)
 
         emit("正在提交...")
         return submit(driver, cfg_obj.auto_submit, emit)

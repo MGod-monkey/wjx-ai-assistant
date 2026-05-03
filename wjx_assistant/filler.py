@@ -2,24 +2,80 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Dict, List
+from threading import Event
+from typing import Any, Callable, Dict, Iterable, List
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webelement import WebElement
 
 from .answers import option_letter_to_index
 from .schema import Question
 
 
-def _click_by_index(elements, idx: int) -> bool:
-    if not elements:
+def _split_answer(answer: Any) -> List[str]:
+    if isinstance(answer, list):
+        return [str(item).strip() for item in answer if str(item).strip()]
+    return [item.strip() for item in str(answer).replace("，", ",").split(",") if item.strip()]
+
+
+def _safe_idx(idx: int, count: int) -> int:
+    if count <= 0:
+        return 0
+    return max(1, min(idx, count))
+
+
+def _scroll_into_view(driver, elem: WebElement) -> None:
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", elem)
+        time.sleep(0.05)
+    except Exception:
+        pass
+
+
+def _safe_click(driver, elem: WebElement) -> None:
+    _scroll_into_view(driver, elem)
+    try:
+        elem.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", elem)
+
+
+def _click_by_index(driver, elements: Iterable[WebElement], idx: int) -> bool:
+    items = list(elements)
+    if not items:
         return False
-    safe_idx = max(1, min(idx, len(elements)))
-    elements[safe_idx - 1].click()
+    safe = _safe_idx(idx, len(items))
+    if safe <= 0:
+        return False
+    _safe_click(driver, items[safe - 1])
     return True
 
 
-def fill_questionnaire(driver, questions: List[Question], answers: Dict[str, Any], log_cb: Callable[..., None] = print) -> None:
+def _find_choice_elements(driver, q: Question) -> List[WebElement]:
+    selectors = [
+        f"#div{q.id} > div.ui-controlgroup > div",
+        f"#div{q.id} .ui-controlgroup div",
+        f"#div{q.id} .label",
+        f"#div{q.id} li",
+    ]
+    for selector in selectors:
+        items = [item for item in driver.find_elements(By.CSS_SELECTOR, selector) if item.is_displayed()]
+        if items:
+            return items
+    return []
+
+
+def fill_questionnaire(
+    driver,
+    questions: List[Question],
+    answers: Dict[str, Any],
+    log_cb: Callable[..., None] = print,
+    stop_event: Event | None = None,
+) -> None:
     for q in questions:
+        if stop_event and stop_event.is_set():
+            log_cb("检测到停止请求，已中断后续题目填写。")
+            return
         answer = answers.get(q.id, "")
         try:
             if q.type == "text":
@@ -42,7 +98,8 @@ def fill_questionnaire(driver, questions: List[Question], answers: Dict[str, Any
                 fill_slider(driver, q, answer)
                 log_cb(f"题 {q.id}: 已设置滑块值 {answer}")
             elif q.type == "sort":
-                log_cb(f"题 {q.id}: 排序题暂不自动拖拽，已跳过")
+                fill_sort(driver, q, answer)
+                log_cb(f"题 {q.id}: 已尝试填写排序题")
             else:
                 log_cb(f"题 {q.id}: 暂不支持题型 {q.raw_type}，已跳过")
         except Exception as exc:
@@ -52,48 +109,101 @@ def fill_questionnaire(driver, questions: List[Question], answers: Dict[str, Any
 
 def fill_text(driver, q: Question, answer: Any) -> None:
     elem = driver.find_element(By.CSS_SELECTOR, f"#q{q.id}")
+    _scroll_into_view(driver, elem)
     elem.clear()
     elem.send_keys(str(answer))
 
 
 def fill_single_like(driver, q: Question, idx: int) -> None:
     if q.type == "scale":
-        selector = f"#div{q.id} .scale-div li"
+        selectors = [f"#div{q.id} .scale-div li", f"#div{q.id} li"]
+        items: List[WebElement] = []
+        for selector in selectors:
+            items = [item for item in driver.find_elements(By.CSS_SELECTOR, selector) if item.is_displayed()]
+            if items:
+                break
     else:
-        selector = f"#div{q.id} > div.ui-controlgroup > div"
-    _click_by_index(driver.find_elements(By.CSS_SELECTOR, selector), idx)
+        items = _find_choice_elements(driver, q)
+    if not _click_by_index(driver, items, idx):
+        raise RuntimeError("没有找到可点击选项")
 
 
 def fill_multiple(driver, q: Question, answer: Any) -> None:
-    values = answer if isinstance(answer, list) else str(answer).split(",")
-    opts = driver.find_elements(By.CSS_SELECTOR, f"#div{q.id} > div.ui-controlgroup > div")
+    values = _split_answer(answer)
+    opts = _find_choice_elements(driver, q)
+    if not opts:
+        raise RuntimeError("没有找到多选选项")
     for value in values:
-        _click_by_index(opts, option_letter_to_index(value))
+        _click_by_index(driver, opts, option_letter_to_index(value))
         time.sleep(0.1)
 
 
 def fill_matrix(driver, q: Question, answer: Any) -> None:
-    values = answer if isinstance(answer, list) else str(answer).split(",")
+    values = _split_answer(answer)
     rows = driver.find_elements(By.CSS_SELECTOR, f"#divRefTab{q.id} tr[rowindex]")
     if not rows:
         rows = driver.find_elements(By.CSS_SELECTOR, f"#div{q.id} table tr[rowindex]")
+    if not rows:
+        raise RuntimeError("没有找到矩阵行")
     for pos, row in enumerate(rows, 1):
-        cells = row.find_elements(By.TAG_NAME, "td")
+        cells = [cell for cell in row.find_elements(By.TAG_NAME, "td") if cell.is_displayed()]
         if len(cells) < 2:
             continue
         raw = values[pos - 1] if pos - 1 < len(values) else "A"
-        idx = max(1, min(option_letter_to_index(raw), len(cells) - 1))
-        cells[idx].click()
-        time.sleep(0.1)
+        idx = _safe_idx(option_letter_to_index(raw), len(cells) - 1)
+        if idx > 0:
+            _safe_click(driver, cells[idx])
+            time.sleep(0.1)
 
 
 def fill_dropdown(driver, q: Question, answer: Any) -> None:
     idx = option_letter_to_index(answer)
-    driver.find_element(By.CSS_SELECTOR, f"#select2-q{q.id}-container").click()
+    container_selectors = [f"#select2-q{q.id}-container", f"#q{q.id}"]
+    clicked = False
+    for selector in container_selectors:
+        try:
+            elem = driver.find_element(By.CSS_SELECTOR, selector)
+            _safe_click(driver, elem)
+            clicked = True
+            break
+        except Exception:
+            pass
+    if not clicked:
+        raise RuntimeError("没有找到下拉框")
     time.sleep(0.3)
     items = driver.find_elements(By.CSS_SELECTOR, f"#select2-q{q.id}-results > li")
-    _click_by_index(items, idx + 1)
+    if items:
+        _click_by_index(driver, items, idx + 1)
+        return
+    options = driver.find_elements(By.CSS_SELECTOR, f"#q{q.id} option")
+    if not _click_by_index(driver, options, idx):
+        raise RuntimeError("没有找到下拉选项")
 
 
 def fill_slider(driver, q: Question, answer: Any) -> None:
-    driver.find_element(By.CSS_SELECTOR, f"#q{q.id}").send_keys(str(answer))
+    elem = driver.find_element(By.CSS_SELECTOR, f"#q{q.id}")
+    value = str(answer).strip() or "80"
+    _scroll_into_view(driver, elem)
+    try:
+        elem.clear()
+        elem.send_keys(value)
+    except Exception:
+        driver.execute_script(
+            "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('input')); arguments[0].dispatchEvent(new Event('change'));",
+            elem,
+            value,
+        )
+
+
+def fill_sort(driver, q: Question, answer: Any) -> None:
+    values = _split_answer(answer)
+    items = [item for item in driver.find_elements(By.CSS_SELECTOR, f"#div{q.id} ul li") if item.is_displayed()]
+    if not items:
+        raise RuntimeError("没有找到排序选项")
+    # Some WJX sort widgets accept clicking items in the desired order. When the
+    # page requires true dragging, this safe fallback leaves a clear log trail.
+    for value in values or [chr(ord("A") + i) for i in range(len(items))]:
+        idx = option_letter_to_index(value)
+        if not _click_by_index(driver, items, idx):
+            break
+        time.sleep(0.15)

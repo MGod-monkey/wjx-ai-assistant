@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Dict, Optional
 
 import cv2
@@ -12,6 +12,21 @@ from PIL import Image, ImageGrab
 
 from wjx_assistant.config import DEFAULT_CONFIG, load_config, save_config
 from wjx_assistant.runner import run_task
+
+COLORS = {
+    "bg": "#f5f7fb",
+    "panel": "#ffffff",
+    "line": "#d8dee9",
+    "text": "#1f2933",
+    "muted": "#617083",
+    "primary": "#1769aa",
+    "primary_hover": "#0d5c9c",
+    "success": "#1b7f4c",
+    "danger": "#b42318",
+    "warning": "#946200",
+    "log_bg": "#111827",
+    "log_text": "#d1d5db",
+}
 
 
 def decode_qr_from_image(image: Image.Image) -> Optional[str]:
@@ -27,136 +42,190 @@ class WJXGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("WJX AI Assistant")
-        self.root.geometry("860x660")
-        self.root.minsize(760, 560)
+        self.root.geometry("980x720")
+        self.root.minsize(860, 620)
+        self.root.configure(bg=COLORS["bg"])
 
         self.config = load_config()
         self.running = False
+        self.stop_event = threading.Event()
         self._task_thread: Optional[threading.Thread] = None
 
+        self._configure_style()
         self._build_ui()
-        self._append_log("程序启动，请输入问卷链接和填写要求后点击开始。")
+        self._append_log("程序启动。请确认只在授权问卷或测试问卷中使用。", "info")
+
+    def _configure_style(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("Root.TFrame", background=COLORS["bg"])
+        style.configure("Panel.TFrame", background=COLORS["panel"], relief="solid", borderwidth=1)
+        style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=("Microsoft YaHei", 18, "bold"))
+        style.configure("Subtitle.TLabel", background=COLORS["bg"], foreground=COLORS["muted"], font=("Microsoft YaHei", 9))
+        style.configure("PanelTitle.TLabel", background=COLORS["panel"], foreground=COLORS["text"], font=("Microsoft YaHei", 11, "bold"))
+        style.configure("Body.TLabel", background=COLORS["panel"], foreground=COLORS["text"], font=("Microsoft YaHei", 9))
+        style.configure("Muted.TLabel", background=COLORS["panel"], foreground=COLORS["muted"], font=("Microsoft YaHei", 9))
+        style.configure("Primary.TButton", font=("Microsoft YaHei", 10, "bold"), padding=(14, 7))
+        style.configure("Tool.TButton", font=("Microsoft YaHei", 9), padding=(10, 5))
+        style.configure("TCheckbutton", background=COLORS["panel"], foreground=COLORS["text"], font=("Microsoft YaHei", 9))
+        style.configure("Horizontal.TProgressbar", troughcolor="#e5eaf1", background=COLORS["primary"])
 
     def _build_ui(self):
-        header = tk.Frame(self.root, bg="#263238", pady=8)
-        header.pack(fill="x")
-        tk.Label(
-            header,
-            text="WJX AI Assistant",
-            font=("Microsoft YaHei", 15, "bold"),
-            fg="white",
-            bg="#263238",
-        ).pack(side="left", padx=15)
-        tk.Button(
-            header,
-            text="设置",
-            command=self._open_settings,
-            font=("Microsoft YaHei", 9),
-            relief="flat",
-            bg="#1976d2",
-            fg="white",
-            cursor="hand2",
+        outer = ttk.Frame(self.root, style="Root.TFrame", padding=18)
+        outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(2, weight=1)
+
+        self._build_header(outer)
+        self._build_workspace(outer)
+        self._build_log_panel(outer)
+
+    def _build_header(self, parent):
+        header = ttk.Frame(parent, style="Root.TFrame")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        header.columnconfigure(0, weight=1)
+
+        title_box = ttk.Frame(header, style="Root.TFrame")
+        title_box.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_box, text="WJX AI Assistant", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(title_box, text="问卷解析、AI 答案生成、自动填写与运行报告", style="Subtitle.TLabel").pack(anchor="w", pady=(2, 0))
+
+        right = ttk.Frame(header, style="Root.TFrame")
+        right.grid(row=0, column=1, sticky="e")
+        self.status_badge = tk.Label(
+            right,
+            text="就绪",
+            bg="#e8f2ff",
+            fg=COLORS["primary"],
             padx=12,
-        ).pack(side="right", padx=10)
+            pady=5,
+            font=("Microsoft YaHei", 9, "bold"),
+        )
+        self.status_badge.pack(side="left", padx=(0, 8))
+        ttk.Button(right, text="设置", style="Tool.TButton", command=self._open_settings).pack(side="left")
 
-        input_frame = tk.Frame(self.root, padx=15, pady=10)
-        input_frame.pack(fill="x")
-        input_frame.columnconfigure(1, weight=1)
+    def _build_workspace(self, parent):
+        workspace = ttk.Frame(parent, style="Root.TFrame")
+        workspace.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        workspace.columnconfigure(0, weight=3)
+        workspace.columnconfigure(1, weight=2)
 
-        tk.Label(input_frame, text="问卷链接:", font=("Microsoft YaHei", 10)).grid(row=0, column=0, sticky="w", pady=5)
-        self.url_entry = tk.Entry(input_frame, font=("Microsoft YaHei", 10), relief="solid", bd=1)
-        self.url_entry.grid(row=0, column=1, sticky="ew", pady=5)
-        tk.Button(
-            input_frame,
-            text="粘贴二维码",
-            command=self._paste_qr,
+        main_panel = ttk.Frame(workspace, style="Panel.TFrame", padding=14)
+        main_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        main_panel.columnconfigure(1, weight=1)
+
+        ttk.Label(main_panel, text="任务输入", style="PanelTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        ttk.Label(main_panel, text="问卷链接", style="Body.TLabel").grid(row=1, column=0, sticky="w", pady=5)
+        self.url_entry = ttk.Entry(main_panel, font=("Microsoft YaHei", 10))
+        self.url_entry.grid(row=1, column=1, sticky="ew", pady=5, padx=(10, 8))
+        ttk.Button(main_panel, text="二维码", style="Tool.TButton", command=self._paste_qr).grid(row=1, column=2, sticky="e", pady=5)
+
+        ttk.Label(main_panel, text="填写要求", style="Body.TLabel").grid(row=2, column=0, sticky="nw", pady=5)
+        req_frame = tk.Frame(main_panel, bg=COLORS["line"], bd=1)
+        req_frame.grid(row=2, column=1, columnspan=2, sticky="ew", pady=5, padx=(10, 0))
+        self.requirements_text = tk.Text(
+            req_frame,
+            height=5,
+            relief="flat",
+            bd=0,
+            wrap="word",
             font=("Microsoft YaHei", 9),
-            relief="flat",
-            bg="#6a1b9a",
-            fg="white",
-            cursor="hand2",
+            bg="#fbfcfe",
+            fg=COLORS["text"],
             padx=8,
-        ).grid(row=0, column=2, sticky="w", pady=5, padx=(8, 0))
-
-        tk.Label(input_frame, text="填写要求:", font=("Microsoft YaHei", 10)).grid(row=1, column=0, sticky="nw", pady=5)
-        self.requirements_text = tk.Text(input_frame, font=("Microsoft YaHei", 9), height=4, relief="solid", bd=1, wrap="word")
-        self.requirements_text.grid(row=1, column=1, columnspan=2, sticky="ew", pady=5)
-
-        controls = tk.Frame(self.root, padx=15, pady=5)
-        controls.pack(fill="x")
-        self.start_btn = tk.Button(
-            controls,
-            text="开始填写",
-            command=self._on_start,
-            font=("Microsoft YaHei", 10, "bold"),
-            bg="#2e7d32",
-            fg="white",
-            relief="flat",
-            cursor="hand2",
-            padx=18,
-            pady=5,
+            pady=8,
         )
-        self.start_btn.pack(side="left", padx=5)
-        self.stop_btn = tk.Button(
-            controls,
-            text="停止",
-            command=self._on_stop,
-            font=("Microsoft YaHei", 10),
-            bg="#c62828",
-            fg="white",
-            relief="flat",
-            cursor="hand2",
-            padx=18,
-            pady=5,
-            state="disabled",
-        )
-        self.stop_btn.pack(side="left", padx=5)
-        tk.Button(
-            controls,
-            text="清空日志",
-            command=self._clear_log,
-            font=("Microsoft YaHei", 10),
-            bg="#607d8b",
-            fg="white",
-            relief="flat",
-            cursor="hand2",
-            padx=18,
-            pady=5,
-        ).pack(side="left", padx=5)
+        self.requirements_text.pack(fill="both", expand=True)
 
+        mode_row = ttk.Frame(main_panel, style="Panel.TFrame")
+        mode_row.grid(row=3, column=1, columnspan=2, sticky="ew", pady=(6, 2), padx=(10, 0))
         self.headless_var = tk.BooleanVar(value=bool(self.config.get("headless", False)))
         self.auto_submit_var = tk.BooleanVar(value=bool(self.config.get("auto_submit", True)))
-        tk.Checkbutton(controls, text="无头模式", variable=self.headless_var, font=("Microsoft YaHei", 9)).pack(side="right", padx=6)
-        tk.Checkbutton(controls, text="自动提交", variable=self.auto_submit_var, font=("Microsoft YaHei", 9)).pack(side="right", padx=6)
+        ttk.Checkbutton(mode_row, text="无头模式", variable=self.headless_var).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(mode_row, text="自动提交", variable=self.auto_submit_var).pack(side="left")
 
-        self.status_label = tk.Label(self.root, text="就绪", anchor="w", font=("Microsoft YaHei", 9), fg="#546e7a", padx=15, pady=3)
-        self.status_label.pack(fill="x")
+        actions = ttk.Frame(main_panel, style="Panel.TFrame")
+        actions.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        self.start_btn = ttk.Button(actions, text="开始填写", style="Primary.TButton", command=self._on_start)
+        self.start_btn.pack(side="left")
+        self.stop_btn = ttk.Button(actions, text="停止", style="Tool.TButton", command=self._on_stop, state="disabled")
+        self.stop_btn.pack(side="left", padx=8)
+        ttk.Button(actions, text="清空日志", style="Tool.TButton", command=self._clear_log).pack(side="left")
 
-        log_frame = tk.Frame(self.root, padx=15)
-        log_frame.pack(fill="both", expand=True, pady=(0, 10))
-        tk.Label(log_frame, text="日志输出:", font=("Microsoft YaHei", 10)).pack(anchor="w", pady=(5, 2))
-        wrapper = tk.Frame(log_frame, bg="#d0d0d0", bd=1, relief="solid")
-        wrapper.pack(fill="both", expand=True)
-        scrollbar = tk.Scrollbar(wrapper)
+        self.progress = ttk.Progressbar(actions, mode="indeterminate", length=170)
+        self.progress.pack(side="right", padx=(8, 0))
+
+        side_panel = ttk.Frame(workspace, style="Panel.TFrame", padding=14)
+        side_panel.grid(row=0, column=1, sticky="nsew")
+        side_panel.columnconfigure(0, weight=1)
+        ttk.Label(side_panel, text="运行概览", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        self.mode_text = ttk.Label(side_panel, text="", style="Body.TLabel", justify="left")
+        self.mode_text.grid(row=1, column=0, sticky="ew", pady=4)
+        self.output_text = ttk.Label(side_panel, text="", style="Muted.TLabel", justify="left", wraplength=310)
+        self.output_text.grid(row=2, column=0, sticky="ew", pady=4)
+        self.safety_text = ttk.Label(
+            side_panel,
+            text="遇到验证码、滑块或安全校验时会提示人工处理，不会绕过平台验证。",
+            style="Muted.TLabel",
+            justify="left",
+            wraplength=310,
+        )
+        self.safety_text.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        self._refresh_overview()
+
+    def _build_log_panel(self, parent):
+        log_panel = ttk.Frame(parent, style="Panel.TFrame", padding=14)
+        log_panel.grid(row=2, column=0, sticky="nsew")
+        log_panel.rowconfigure(1, weight=1)
+        log_panel.columnconfigure(0, weight=1)
+        ttk.Label(log_panel, text="日志", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        wrapper = tk.Frame(log_panel, bg=COLORS["line"], bd=1)
+        wrapper.grid(row=1, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(wrapper)
         scrollbar.pack(side="right", fill="y")
         self.log_text = tk.Text(
             wrapper,
             font=("Consolas", 9),
-            bg="#1e1e1e",
-            fg="#d4d4d4",
+            bg=COLORS["log_bg"],
+            fg=COLORS["log_text"],
             relief="flat",
             state="disabled",
             yscrollcommand=scrollbar.set,
             wrap="word",
+            padx=10,
+            pady=10,
         )
         self.log_text.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.log_text.yview)
+        self.log_text.tag_config("info", foreground=COLORS["log_text"])
+        self.log_text.tag_config("success", foreground="#86efac")
+        self.log_text.tag_config("warn", foreground="#fde68a")
+        self.log_text.tag_config("error", foreground="#fca5a5")
+
+    def _refresh_overview(self):
+        mode = "无头模式" if self.headless_var.get() else "可视化浏览器"
+        submit = "自动提交" if self.auto_submit_var.get() else "只填写不提交"
+        self.mode_text.config(text=f"浏览器: {mode}\n提交: {submit}")
+        self.output_text.config(text=f"报告目录: {self.config.get('output_dir', './runs')}")
 
     def _append_log(self, msg: str, tag: str = "info", add_newline: bool = True, **kwargs):
+        text = str(msg)
+        if "失败" in text or "出错" in text or "错误" in text:
+            tag = "error"
+        elif "停止" in text or "验证" in text or "跳过" in text:
+            tag = "warn"
+        elif "完成" in text or "保存" in text or "成功" in text:
+            tag = "success"
+
         def append():
             self.log_text.config(state="normal")
             suffix = "\n" if add_newline else ""
-            self.log_text.insert(tk.END, str(msg) + suffix)
+            self.log_text.insert(tk.END, text + suffix, tag)
             self.log_text.see(tk.END)
             self.log_text.config(state="disabled")
 
@@ -167,8 +236,15 @@ class WJXGUI:
         self.log_text.delete("1.0", tk.END)
         self.log_text.config(state="disabled")
 
-    def _set_status(self, msg: str):
-        self.root.after(0, lambda: self.status_label.config(text=msg))
+    def _set_status(self, msg: str, kind: str = "info"):
+        colors = {
+            "info": ("#e8f2ff", COLORS["primary"]),
+            "success": ("#e9f8ef", COLORS["success"]),
+            "warn": ("#fff7e6", COLORS["warning"]),
+            "error": ("#fdecec", COLORS["danger"]),
+        }
+        bg, fg = colors.get(kind, colors["info"])
+        self.root.after(0, lambda: self.status_badge.config(text=msg, bg=bg, fg=fg))
 
     def _set_running(self, running: bool):
         self.running = running
@@ -178,6 +254,11 @@ class WJXGUI:
             self.stop_btn.config(state="normal" if running else "disabled")
             self.url_entry.config(state="disabled" if running else "normal")
             self.requirements_text.config(state="disabled" if running else "normal")
+            if running:
+                self.progress.start(12)
+                self._set_status("运行中", "info")
+            else:
+                self.progress.stop()
 
         self.root.after(0, update)
 
@@ -195,7 +276,7 @@ class WJXGUI:
                 return
             self.url_entry.delete(0, tk.END)
             self.url_entry.insert(0, url)
-            self._append_log(f"已识别二维码: {url}")
+            self._append_log(f"已识别二维码: {url}", "success")
         except Exception as exc:
             messagebox.showerror("错误", f"读取剪贴板或识别二维码失败: {exc}")
 
@@ -211,9 +292,10 @@ class WJXGUI:
             messagebox.showerror("错误", "请先在设置中配置 API Key，或设置 WJX_API_KEY 环境变量。")
             return
 
+        self.stop_event.clear()
         self._clear_log()
+        self._refresh_overview()
         self._set_running(True)
-        self._set_status("运行中...")
 
         def task():
             success = run_task(
@@ -223,16 +305,18 @@ class WJXGUI:
                 log_cb=self._append_log,
                 progress_cb=self._append_log,
                 headless=bool(cfg.get("headless")),
+                stop_event=self.stop_event,
             )
             self._set_running(False)
-            self._set_status("完成" if success else "失败")
+            self._set_status("完成" if success else "失败", "success" if success else "error")
 
         self._task_thread = threading.Thread(target=task, daemon=True)
         self._task_thread.start()
 
     def _on_stop(self):
-        messagebox.showinfo("提示", "当前任务会在本轮浏览器操作结束后停止。若页面已打开，也可以直接关闭浏览器。")
-        self._append_log("已请求停止。")
+        self.stop_event.set()
+        self._set_status("停止中", "warn")
+        self._append_log("已请求停止，当前浏览器操作结束后会中断任务。", "warn")
 
     def _open_settings(self):
         SettingsDialog(self.root, self.config, self._on_settings_saved)
@@ -241,7 +325,8 @@ class WJXGUI:
         self.config = new_cfg
         self.headless_var.set(bool(new_cfg.get("headless", False)))
         self.auto_submit_var.set(bool(new_cfg.get("auto_submit", True)))
-        self._append_log("设置已保存。")
+        self._refresh_overview()
+        self._append_log("设置已保存。", "success")
 
 
 class SettingsDialog:
@@ -253,14 +338,20 @@ class SettingsDialog:
 
         self.win = tk.Toplevel(parent)
         self.win.title("设置")
-        self.win.geometry("560x520")
+        self.win.geometry("600x560")
         self.win.resizable(False, False)
+        self.win.configure(bg=COLORS["bg"])
         self.win.transient(parent)
         self.win.grab_set()
 
-        outer = tk.Frame(self.win, padx=18, pady=14)
+        outer = ttk.Frame(self.win, style="Root.TFrame", padding=16)
         outer.pack(fill="both", expand=True)
-        outer.columnconfigure(1, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        ttk.Label(outer, text="运行设置", style="Title.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 12))
+        panel = ttk.Frame(outer, style="Panel.TFrame", padding=14)
+        panel.grid(row=1, column=0, sticky="nsew")
+        panel.columnconfigure(1, weight=1)
 
         rows = [
             ("API Key", "api_key", "entry"),
@@ -275,27 +366,25 @@ class SettingsDialog:
             ("最大重试次数", "max_retries", "entry"),
         ]
         for row, (label, key, kind) in enumerate(rows):
-            tk.Label(outer, text=label + ":", font=("Microsoft YaHei", 9)).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Label(panel, text=label + ":", style="Body.TLabel").grid(row=row, column=0, sticky="w", pady=4)
             var = tk.StringVar(value=str(self.cfg.get(key, "")))
             self._vars[key] = var
             show = "*" if key == "api_key" and var.get() else None
-            tk.Entry(outer, textvariable=var, show=show, font=("Microsoft YaHei", 9), relief="solid", bd=1).grid(
-                row=row, column=1, sticky="ew", pady=4, padx=(8, 0)
-            )
+            ttk.Entry(panel, textvariable=var, show=show, font=("Microsoft YaHei", 9)).grid(row=row, column=1, sticky="ew", pady=4, padx=(10, 0))
             if kind == "dir":
-                tk.Button(outer, text="浏览", command=lambda k=key: self._browse_dir(k)).grid(row=row, column=2, padx=(6, 0))
+                ttk.Button(panel, text="浏览", style="Tool.TButton", command=lambda k=key: self._browse_dir(k)).grid(row=row, column=2, padx=(6, 0))
 
         base = len(rows)
         self._vars["headless"] = tk.BooleanVar(value=bool(self.cfg.get("headless", False)))
         self._vars["auto_submit"] = tk.BooleanVar(value=bool(self.cfg.get("auto_submit", True)))
-        tk.Checkbutton(outer, text="默认无头模式", variable=self._vars["headless"]).grid(row=base, column=1, sticky="w", pady=5)
-        tk.Checkbutton(outer, text="自动提交", variable=self._vars["auto_submit"]).grid(row=base + 1, column=1, sticky="w", pady=5)
+        ttk.Checkbutton(panel, text="默认无头模式", variable=self._vars["headless"]).grid(row=base, column=1, sticky="w", pady=(8, 2))
+        ttk.Checkbutton(panel, text="自动提交", variable=self._vars["auto_submit"]).grid(row=base + 1, column=1, sticky="w", pady=2)
 
-        buttons = tk.Frame(outer)
-        buttons.grid(row=base + 2, column=0, columnspan=3, pady=18)
-        tk.Button(buttons, text="保存", command=self._on_save, bg="#2e7d32", fg="white", relief="flat", padx=20, pady=5).pack(side="left", padx=5)
-        tk.Button(buttons, text="恢复默认", command=self._on_reset, bg="#f9a825", fg="white", relief="flat", padx=20, pady=5).pack(side="left", padx=5)
-        tk.Button(buttons, text="取消", command=self.win.destroy, bg="#78909c", fg="white", relief="flat", padx=20, pady=5).pack(side="left", padx=5)
+        buttons = ttk.Frame(outer, style="Root.TFrame")
+        buttons.grid(row=2, column=0, sticky="e", pady=(14, 0))
+        ttk.Button(buttons, text="保存", style="Primary.TButton", command=self._on_save).pack(side="left", padx=5)
+        ttk.Button(buttons, text="恢复默认", style="Tool.TButton", command=self._on_reset).pack(side="left", padx=5)
+        ttk.Button(buttons, text="取消", style="Tool.TButton", command=self.win.destroy).pack(side="left", padx=5)
 
     def _browse_dir(self, key: str):
         value = filedialog.askdirectory()

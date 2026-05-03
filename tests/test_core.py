@@ -3,6 +3,7 @@
 from wjx_assistant.ai_client import parse_ai_json_response
 from wjx_assistant.answers import option_letter_to_index, validate_answers
 from wjx_assistant.config import normalize_config
+from wjx_assistant.filler import _split_answer
 from wjx_assistant.schema import Option, Question
 
 
@@ -41,6 +42,14 @@ class AnswerTests(unittest.TestCase):
         questions = [Question(id="1", raw_type="1", title="x")]
         answers = validate_answers(questions, {})
         self.assertEqual(answers["1"], "满意")
+
+
+class FillerHelperTests(unittest.TestCase):
+    def test_split_answer_handles_chinese_comma(self):
+        self.assertEqual(_split_answer("A，C, D"), ["A", "C", "D"])
+
+    def test_split_answer_handles_list(self):
+        self.assertEqual(_split_answer(["A", "", "B"]), ["A", "B"])
 
 
 if __name__ == "__main__":
