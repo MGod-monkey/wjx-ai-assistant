@@ -16,6 +16,7 @@ config.json
 
 # Runtime output
 screenshots/
+runs/
 *.log
 
 # OS/editor files

@@ -6,5 +6,9 @@
     "wait_max": 20,
     "screenshot_dir": "./screenshots",
     "browser_width": 550,
-    "browser_height": 700
+    "browser_height": 700,
+    "headless": false,
+    "auto_submit": true,
+    "max_retries": 2,
+    "output_dir": "./runs"
 }
