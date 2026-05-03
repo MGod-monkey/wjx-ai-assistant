@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 CONFIG_FILE = "config.json"
 ENV_API_KEY = "WJX_API_KEY"
@@ -15,7 +15,8 @@ ENV_API_KEY = "WJX_API_KEY"
 class AppConfig:
     api_key: str = ""
     api_url: str = "https://api.siliconflow.cn/v1/chat/completions"
-    model: str = "deepseek-ai/DeepSeek-V2.5"
+    model: str = "deepseek-ai/DeepSeek-V3"
+    model_fallbacks: List[str] = field(default_factory=lambda: ["Qwen/Qwen2-7B-Instruct"])
     wait_min: int = 80
     wait_max: int = 100
     screenshot_dir: str = "./screenshots"
@@ -46,6 +47,14 @@ def _coerce_int(value: Any, default: int) -> int:
         return default
 
 
+def _coerce_fallbacks(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
 def normalize_config(data: Dict[str, Any] | None) -> AppConfig:
     merged = DEFAULT_CONFIG.copy()
     if data:
@@ -53,6 +62,7 @@ def normalize_config(data: Dict[str, Any] | None) -> AppConfig:
 
     cfg = AppConfig(**{key: merged.get(key) for key in DEFAULT_CONFIG})
     cfg.api_key = os.getenv(ENV_API_KEY, cfg.api_key or "")
+    cfg.model_fallbacks = _coerce_fallbacks(cfg.model_fallbacks)
     cfg.wait_min = _coerce_int(cfg.wait_min, 80)
     cfg.wait_max = _coerce_int(cfg.wait_max, 100)
     cfg.browser_width = _coerce_int(cfg.browser_width, 550)

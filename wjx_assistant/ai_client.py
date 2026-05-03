@@ -11,6 +11,8 @@ from .config import AppConfig
 from .parser import format_questionnaire_for_ai
 from .schema import Question
 
+MODEL_DISABLED_CODE = 30003
+
 
 def build_prompt(questions: List[Question], requirements: str) -> str:
     questionnaire_text = format_questionnaire_for_ai(questions)
@@ -39,12 +41,36 @@ def build_prompt(questions: List[Question], requirements: str) -> str:
 """
 
 
+def _candidate_models(cfg: AppConfig) -> List[str]:
+    models: List[str] = []
+    for model in [cfg.model, *cfg.model_fallbacks]:
+        model = str(model or "").strip()
+        if model and model not in models:
+            models.append(model)
+    return models
+
+
 def call_ai_api(questions: List[Question], requirements: str, cfg: AppConfig, log_cb: Callable[..., None] = print) -> Dict[str, Any]:
     if not cfg.api_key:
         raise RuntimeError("请先在 config.json、GUI 设置或 WJX_API_KEY 环境变量中配置 API Key。")
 
+    errors: List[str] = []
+    for model in _candidate_models(cfg):
+        try:
+            return _call_model(questions, requirements, cfg, model, log_cb)
+        except RuntimeError as exc:
+            message = str(exc)
+            errors.append(message)
+            if "模型已被禁用" in message and model != _candidate_models(cfg)[-1]:
+                log_cb(f"模型 {model} 不可用，正在尝试备用模型...")
+                continue
+            raise
+    raise RuntimeError("; ".join(errors) if errors else "没有可用模型。")
+
+
+def _call_model(questions: List[Question], requirements: str, cfg: AppConfig, model: str, log_cb: Callable[..., None]) -> Dict[str, Any]:
     payload = {
-        "model": cfg.model,
+        "model": model,
         "messages": [{"role": "user", "content": build_prompt(questions, requirements)}],
         "stream": True,
     }
@@ -54,10 +80,10 @@ def call_ai_api(questions: List[Question], requirements: str, cfg: AppConfig, lo
         "authorization": f"Bearer {cfg.api_key}",
     }
 
-    log_cb("正在调用 AI 生成答案，请稍候...")
+    log_cb(f"正在调用 AI 生成答案，请稍候... 模型: {model}")
     response = requests.post(cfg.api_url, json=payload, headers=headers, stream=True, timeout=120)
     if response.status_code != 200:
-        raise RuntimeError(f"API 请求失败: {response.status_code} {response.text}")
+        raise RuntimeError(_format_api_error(response, model))
 
     content = ""
     streamed_len = 0
@@ -82,6 +108,22 @@ def call_ai_api(questions: List[Question], requirements: str, cfg: AppConfig, lo
     answers = parse_ai_json_response(content)
     log_cb(f"AI 答案解析结果: {answers}")
     return answers
+
+
+def _format_api_error(response: requests.Response, model: str) -> str:
+    raw = response.text
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    code = data.get("code")
+    message = data.get("message") or raw
+    if response.status_code == 403 and code == MODEL_DISABLED_CODE:
+        return (
+            f"模型已被禁用: {model}。请在设置中改用可用模型，例如 deepseek-ai/DeepSeek-V3，"
+            "或通过 SiliconFlow 的 /v1/models 接口查看当前账号可用模型。"
+        )
+    return f"API 请求失败: {response.status_code} {message}"
 
 
 def parse_ai_json_response(content: str) -> Dict[str, Any]:

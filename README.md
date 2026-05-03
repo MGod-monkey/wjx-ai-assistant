@@ -61,7 +61,7 @@ copy config.example.json config.json
 {
   "api_key": "你的 API Key",
   "api_url": "https://api.siliconflow.cn/v1/chat/completions",
-  "model": "deepseek-ai/DeepSeek-V2.5",
+  "model": "deepseek-ai/DeepSeek-V3",`n  "model_fallbacks": ["Qwen/Qwen2-7B-Instruct"],
   "wait_min": 10,
   "wait_max": 20,
   "screenshot_dir": "./screenshots",
@@ -74,7 +74,7 @@ copy config.example.json config.json
 }
 ```
 
-也可以把 API Key 放到环境变量 `WJX_API_KEY` 中。`config.json` 已被 `.gitignore` 忽略，请不要把真实密钥提交到仓库。
+也可以把 API Key 放到环境变量 `WJX_API_KEY` 中。`model_fallbacks` 会在主模型被禁用时自动尝试备用模型；如果服务商模型列表变化，请在 SiliconFlow 控制台或 `/v1/models` 接口确认当前账号可用模型。`config.json` 已被 `.gitignore` 忽略，请不要把真实密钥提交到仓库。
 
 ## GUI 使用
 

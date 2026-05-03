@@ -1,7 +1,10 @@
 ﻿{
     "api_key": "",
     "api_url": "https://api.siliconflow.cn/v1/chat/completions",
-    "model": "deepseek-ai/DeepSeek-V2.5",
+    "model": "deepseek-ai/DeepSeek-V3",
+    "model_fallbacks": [
+        "Qwen/Qwen2-7B-Instruct"
+    ],
     "wait_min": 10,
     "wait_max": 20,
     "screenshot_dir": "./screenshots",
