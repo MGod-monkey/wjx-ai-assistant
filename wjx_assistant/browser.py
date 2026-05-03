@@ -34,17 +34,58 @@ def wait_for_css(driver: webdriver.Chrome, selector: str, timeout: int = 10):
     return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
 
 
+def _text(elem) -> str:
+    return " ".join((elem.text or elem.get_attribute("textContent") or "").split())
+
+
+def _safe_click(driver: webdriver.Chrome, elem) -> None:
+    driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", elem)
+    time.sleep(0.1)
+    try:
+        elem.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", elem)
+
+
 def click_entry_button(driver: webdriver.Chrome, log_cb: Callable[..., None] = print) -> bool:
     keywords = ["开始作答", "开始答题", "立即参与", "开始填写", "马上去答", "参加答题", "进入答题"]
-    for keyword in keywords:
-        xpath = f"//*[self::button or self::a or self::div or self::span][contains(normalize-space(.), '{keyword}')]"
+    precise_selectors = [
+        "#cgstartbutton",
+        ".lxstartBtn",
+        ".slideChunkWord",
+        "a",
+        "button",
+        "[role='button']",
+    ]
+
+    candidates = []
+    for selector in precise_selectors:
         try:
-            for elem in driver.find_elements(By.XPATH, xpath):
-                if elem.is_displayed() and elem.is_enabled():
-                    log_cb(f"点击入口按钮: {elem.text.strip() or keyword}")
-                    elem.click()
-                    time.sleep(2)
-                    return True
+            candidates.extend(driver.find_elements(By.CSS_SELECTOR, selector))
+        except Exception:
+            pass
+
+    seen = set()
+    for elem in candidates:
+        try:
+            elem_id = elem.id
+            if elem_id in seen:
+                continue
+            seen.add(elem_id)
+            label = _text(elem)
+            if label not in keywords:
+                continue
+            target = elem
+            if elem.tag_name.lower() not in {"a", "button"} and elem.get_attribute("role") != "button":
+                try:
+                    target = elem.find_element(By.XPATH, "./ancestor-or-self::*[self::a or self::button or @role='button' or contains(@class,'lxstartBtn')][1]")
+                except Exception:
+                    target = elem
+            if target.is_displayed() and target.is_enabled():
+                log_cb(f"点击入口按钮: {label}")
+                _safe_click(driver, target)
+                time.sleep(2)
+                return True
         except Exception:
             continue
     return False
@@ -53,8 +94,15 @@ def click_entry_button(driver: webdriver.Chrome, log_cb: Callable[..., None] = p
 def wait_for_questions(driver: webdriver.Chrome, timeout: int = 10) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if driver.find_elements(By.CSS_SELECTOR, "#divQuestion [topic]"):
-            return True
+        try:
+            visible_questions = [
+                elem for elem in driver.find_elements(By.CSS_SELECTOR, "#divQuestion .field[topic]")
+                if elem.is_displayed()
+            ]
+            if visible_questions:
+                return True
+        except Exception:
+            pass
         time.sleep(0.5)
     return False
 
@@ -63,7 +111,7 @@ def go_next_page(driver: webdriver.Chrome) -> bool:
     try:
         next_btn = driver.find_element(By.CSS_SELECTOR, "#divNext")
         if next_btn.is_displayed():
-            next_btn.click()
+            _safe_click(driver, next_btn)
             time.sleep(0.8)
             return True
     except Exception:

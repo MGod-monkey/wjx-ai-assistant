@@ -18,7 +18,7 @@ from .validators import is_incomplete_prompt, is_manual_verification_page, valid
 
 def submit(driver, auto_submit: bool, log_cb: Callable[..., None] = print) -> bool:
     if not auto_submit:
-        log_cb("已按配置跳过提交，浏览器页面保留为待人工检查状态。")
+        log_cb("已按配置跳过提交。可视化模式会保留浏览器页面供人工检查；无头模式会保存运行报告后关闭浏览器。")
         return True
     try:
         driver.find_element("css selector", "#ctlNext").click()
@@ -132,7 +132,10 @@ def run_task(
     finally:
         save_run_report(run_dir, driver, cfg_obj, questions, answers, logs, log_cb)
         if driver:
-            driver.quit()
+            if cfg_obj.auto_submit or cfg_obj.headless:
+                driver.quit()
+            else:
+                emit("浏览器已保留，请人工检查后手动关闭。")
 
 
 def parse_only(url: str, cfg: Dict | AppConfig, log_cb: Callable[..., None] = print):

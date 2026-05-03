@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+import re
 from typing import Any, Dict, List
 
 from .schema import Question
@@ -13,6 +14,12 @@ def normalize_answer_value(value: Any) -> Any:
     return str(value).strip()
 
 
+def _clean_option_text(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^\s*[A-Z][.、．]?\s*", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", "", text).lower()
+
+
 def option_letter_to_index(value: Any) -> int:
     text = str(value).strip()
     if not text:
@@ -22,6 +29,22 @@ def option_letter_to_index(value: Any) -> int:
     first = text[0].upper()
     if "A" <= first <= "Z":
         return ord(first) - ord("A") + 1
+    return 1
+
+
+def option_value_to_index(question: Question, value: Any) -> int:
+    text = str(value).strip()
+    if not text:
+        return 1
+    if text.isdigit() or (text and "A" <= text[0].upper() <= "Z"):
+        return option_letter_to_index(text)
+
+    target = _clean_option_text(text)
+    for idx, option in enumerate(question.options, 1):
+        label = _clean_option_text(option.label)
+        raw = _clean_option_text(option.value)
+        if target and (target == label or target == raw or target in label or label in target):
+            return idx
     return 1
 
 
@@ -47,7 +70,7 @@ def validate_answers(questions: List[Question], raw_answers: Dict[str, Any]) -> 
         value = raw_answers.get(q.id, default_answer(q))
         value = normalize_answer_value(value)
         if q.type in {"single", "scale", "dropdown"}:
-            idx = option_letter_to_index(value)
+            idx = option_value_to_index(q, value)
             option_count = max(1, len(q.options))
             idx = max(1, min(idx, option_count))
             value = chr(ord("A") + idx - 1)
@@ -58,7 +81,7 @@ def validate_answers(questions: List[Question], raw_answers: Dict[str, Any]) -> 
             option_count = max(1, len(q.options))
             clamped = []
             for item in values:
-                idx = max(1, min(option_letter_to_index(item), option_count))
+                idx = max(1, min(option_value_to_index(q, item), option_count))
                 letter = chr(ord("A") + idx - 1)
                 if letter not in clamped:
                     clamped.append(letter)

@@ -27,7 +27,7 @@ def _safe_idx(idx: int, count: int) -> int:
 def _scroll_into_view(driver, elem: WebElement) -> None:
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", elem)
-        time.sleep(0.05)
+        time.sleep(0.08)
     except Exception:
         pass
 
@@ -51,12 +51,42 @@ def _click_by_index(driver, elements: Iterable[WebElement], idx: int) -> bool:
     return True
 
 
+def _question_div(driver, qid: str) -> WebElement:
+    return driver.find_element(By.CSS_SELECTOR, f"#div{qid}")
+
+
+def _is_question_visible(driver, qid: str) -> bool:
+    try:
+        return _question_div(driver, qid).is_displayed()
+    except Exception:
+        return False
+
+
+def _ensure_question_visible(driver, q: Question) -> None:
+    if _is_question_visible(driver, q.id):
+        return
+    for _ in range(12):
+        try:
+            next_btn = driver.find_element(By.CSS_SELECTOR, "#divNext")
+            if not next_btn.is_displayed():
+                break
+            _safe_click(driver, next_btn)
+            time.sleep(0.6)
+            if _is_question_visible(driver, q.id):
+                return
+        except Exception:
+            break
+    if not _is_question_visible(driver, q.id):
+        raise RuntimeError("题目所在分页不可见，无法自动翻到该题")
+
+
 def _find_choice_elements(driver, q: Question) -> List[WebElement]:
     selectors = [
-        f"#div{q.id} > div.ui-controlgroup > div",
-        f"#div{q.id} .ui-controlgroup div",
-        f"#div{q.id} .label",
-        f"#div{q.id} li",
+        f"#div{q.id} .ui-radio .jqradio",
+        f"#div{q.id} .ui-checkbox .jqcheck",
+        f"#div{q.id} .ui-radio",
+        f"#div{q.id} .ui-checkbox",
+        f"#div{q.id} .ui-controlgroup .label",
     ]
     for selector in selectors:
         items = [item for item in driver.find_elements(By.CSS_SELECTOR, selector) if item.is_displayed()]
@@ -78,6 +108,7 @@ def fill_questionnaire(
             return
         answer = answers.get(q.id, "")
         try:
+            _ensure_question_visible(driver, q)
             if q.type == "text":
                 fill_text(driver, q, answer)
                 log_cb(f"题 {q.id}: 已填写文本")
@@ -110,13 +141,20 @@ def fill_questionnaire(
 def fill_text(driver, q: Question, answer: Any) -> None:
     elem = driver.find_element(By.CSS_SELECTOR, f"#q{q.id}")
     _scroll_into_view(driver, elem)
-    elem.clear()
-    elem.send_keys(str(answer))
+    try:
+        elem.clear()
+        elem.send_keys(str(answer))
+    except Exception:
+        driver.execute_script(
+            "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('input')); arguments[0].dispatchEvent(new Event('change'));",
+            elem,
+            str(answer),
+        )
 
 
 def fill_single_like(driver, q: Question, idx: int) -> None:
     if q.type == "scale":
-        selectors = [f"#div{q.id} .scale-div li", f"#div{q.id} li"]
+        selectors = [f"#div{q.id} .scale-div a", f"#div{q.id} .scale-div li", f"#div{q.id} li"]
         items: List[WebElement] = []
         for selector in selectors:
             items = [item for item in driver.find_elements(By.CSS_SELECTOR, selector) if item.is_displayed()]
@@ -143,6 +181,7 @@ def fill_matrix(driver, q: Question, answer: Any) -> None:
     rows = driver.find_elements(By.CSS_SELECTOR, f"#divRefTab{q.id} tr[rowindex]")
     if not rows:
         rows = driver.find_elements(By.CSS_SELECTOR, f"#div{q.id} table tr[rowindex]")
+    rows = [row for row in rows if row.is_displayed()]
     if not rows:
         raise RuntimeError("没有找到矩阵行")
     for pos, row in enumerate(rows, 1):
@@ -163,19 +202,20 @@ def fill_dropdown(driver, q: Question, answer: Any) -> None:
     for selector in container_selectors:
         try:
             elem = driver.find_element(By.CSS_SELECTOR, selector)
-            _safe_click(driver, elem)
-            clicked = True
-            break
+            if elem.is_displayed():
+                _safe_click(driver, elem)
+                clicked = True
+                break
         except Exception:
             pass
     if not clicked:
         raise RuntimeError("没有找到下拉框")
     time.sleep(0.3)
-    items = driver.find_elements(By.CSS_SELECTOR, f"#select2-q{q.id}-results > li")
+    items = [item for item in driver.find_elements(By.CSS_SELECTOR, f"#select2-q{q.id}-results > li") if item.is_displayed()]
     if items:
         _click_by_index(driver, items, idx + 1)
         return
-    options = driver.find_elements(By.CSS_SELECTOR, f"#q{q.id} option")
+    options = [item for item in driver.find_elements(By.CSS_SELECTOR, f"#q{q.id} option") if item.is_displayed()]
     if not _click_by_index(driver, options, idx):
         raise RuntimeError("没有找到下拉选项")
 
@@ -200,8 +240,6 @@ def fill_sort(driver, q: Question, answer: Any) -> None:
     items = [item for item in driver.find_elements(By.CSS_SELECTOR, f"#div{q.id} ul li") if item.is_displayed()]
     if not items:
         raise RuntimeError("没有找到排序选项")
-    # Some WJX sort widgets accept clicking items in the desired order. When the
-    # page requires true dragging, this safe fallback leaves a clear log trail.
     for value in values or [chr(ord("A") + i) for i in range(len(items))]:
         idx = option_letter_to_index(value)
         if not _click_by_index(driver, items, idx):

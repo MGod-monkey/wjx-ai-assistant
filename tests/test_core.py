@@ -1,7 +1,7 @@
 ﻿import unittest
 
 from wjx_assistant.ai_client import _format_api_error, parse_ai_json_response
-from wjx_assistant.answers import option_letter_to_index, validate_answers
+from wjx_assistant.answers import option_letter_to_index, option_value_to_index, validate_answers
 from wjx_assistant.config import normalize_config
 from wjx_assistant.filler import _split_answer
 from wjx_assistant.parser import _clean_question_text, _element_text, _extract_choice_options
@@ -50,10 +50,24 @@ class AnswerTests(unittest.TestCase):
         self.assertEqual(option_letter_to_index("c"), 3)
         self.assertEqual(option_letter_to_index("2"), 2)
 
+    def test_option_text_maps_to_index(self):
+        question = Question(id="2", raw_type="3", title="年级", options=[Option("大一"), Option("大二"), Option("大三")])
+        self.assertEqual(option_value_to_index(question, "大三"), 3)
+
     def test_validate_answers_clamps_choice(self):
         questions = [Question(id="1", raw_type="3", title="x", options=[Option("a"), Option("b")])]
         answers = validate_answers(questions, {"1": "Z"})
         self.assertEqual(answers["1"], "B")
+
+    def test_validate_answers_maps_choice_text(self):
+        questions = [Question(id="4", raw_type="3", title="x", options=[Option("总是刷到"), Option("经常刷到")])]
+        answers = validate_answers(questions, {"4": "经常刷到"})
+        self.assertEqual(answers["4"], "B")
+
+    def test_validate_answers_maps_multiple_texts(self):
+        questions = [Question(id="5", raw_type="4", title="x", options=[Option("传统节日与民俗"), Option("书法、国画"), Option("非遗手工技艺")])]
+        answers = validate_answers(questions, {"5": ["传统节日与民俗", "非遗手工技艺"]})
+        self.assertEqual(answers["5"], ["A", "C"])
 
     def test_validate_answers_adds_default(self):
         questions = [Question(id="1", raw_type="1", title="x")]
